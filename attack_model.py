@@ -13,9 +13,11 @@ from torch import nn
 import torchvision
 from torchvision.utils import save_image
 import torchvision.models as models
+from torch.utils.data import DataLoader, Dataset
 import math
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+from torchvision import datasets
 import matplotlib.pyplot as plt
 import os
 from PIL import Image
@@ -67,6 +69,127 @@ class decoder_resnet18(nn.Module):
     def __init__(self):
         super(decoder_resnet18, self).__init__()
 
+        # Mirrors encoder's layer2 (the residual block) — this becomes
+        # the *first* thing the decoder does, since decoder runs in reverse
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+        )
+
+        # Upsample x2 (undoes encoder's maxpool stride=2)
+        self.up1 = nn.Sequential(
+            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=2,
+                                padding=1, output_padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+
+        # Upsample x2 again (undoes encoder's first conv stride=2)
+        self.up2 = nn.Sequential(
+            nn.ConvTranspose2d(64, 64, kernel_size=7, stride=2,
+                                padding=3, output_padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+
+        # Project back to 3 channels (RGB)
+        self.output = nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1)
+
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        # Mirror the encoder's residual block
+        residual = x
+        out = self.layer1(x)
+        out = out + residual        # "adding the input here again"
+        out = F.relu(out)
+
+        # Undo the encoder's two stride-2 downsampling steps
+        out = self.up1(out)         # /4 -> /2 resolution
+        out = self.up2(out)         # /2 -> full resolution
+
+        out = torch.tanh(self.output(out))  # or leave unbounded / use tanh
+        return out
+
+'''
+def _make_layer(self, BasicBlockDec, planes, num_Blocks, stride):
+        strides = [stride] + [1]*(num_Blocks-1)
+        layers = []
+        for stride in reversed(strides):
+            layers += [BasicBlockDec(self.in_planes, stride)]
+        self.in_planes = planes
+        return nn.Sequential(*layers)
+
+    def forward(self, z):
+        x = self.linear(z)
+        x = x.view(z.size(0), 512, 1, 1)
+        x = F.interpolate(x, scale_factor=4)
+        x = self.layer4(x)
+        x = self.layer3(x)
+        x = self.layer2(x)
+        x = self.layer1(x)
+        x = torch.sigmoid(self.conv1(x))
+        x = x.view(x.size(0), 3, 64, 64)
+        return x
+
+    class ResizeConv2d(nn.Module):
+
+    def __init__(self, in_channels, out_channels, kernel_size, scale_factor, mode='nearest'):
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.mode = mode
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1)
+
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
+        x = self.conv(x)
+        return x
+
+class BasicBlockDec(nn.Module):
+
+    def __init__(self, in_planes, stride=1):
+        super().__init__()
+
+        planes = int(in_planes/stride)
+
+        self.conv2 = nn.Conv2d(in_planes, in_planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(in_planes)
+        # self.bn1 could have been placed here, but that messes up the order of the layers when printing the class
+
+        if stride == 1:
+            self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(planes)
+            self.shortcut = nn.Sequential()
+        else:
+            self.conv1 = ResizeConv2d(in_planes, planes, kernel_size=3, scale_factor=stride)
+            self.bn1 = nn.BatchNorm2d(planes)
+            self.shortcut = nn.Sequential(
+                ResizeConv2d(in_planes, planes, kernel_size=3, scale_factor=stride),
+                nn.BatchNorm2d(planes)
+            )
+
+    def forward(self, x):
+        out = torch.relu(self.bn2(self.conv2(x)))
+        out = self.bn1(self.conv1(out))
+        out += self.shortcut(x)
+        out = torch.relu(out)
+        return out
+
+    
+'''
+
+'''class decoder_resnet18(nn.Module):
+    def __init__(self):
+        super(decoder_resnet18, self).__init__()
+
         self.layer2 = nn.Sequential(
             nn.Conv2d(
                 64, 64,
@@ -89,29 +212,17 @@ class decoder_resnet18(nn.Module):
         )
 
         self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(
-                64, 64,
-                kernel_size=3,
-                stride=2,
-                padding=1,
-                output_padding=1,
-                bias=False
-            ),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='reflect', bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True)
         )
 
         self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(
-                64, 64,
-                kernel_size=7,
-                stride=2,
-                padding=3,
-                output_padding=1,
-                bias=False
-            ),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='reflect', bias=False),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True) 
         )
 
         # 64 feature maps to
@@ -124,12 +235,11 @@ class decoder_resnet18(nn.Module):
 
         for m in self.modules():
             if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
 
             elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
 
@@ -148,7 +258,7 @@ class decoder_resnet18(nn.Module):
 
         out = self.output(out)
 
-        return out
+        return out '''
 
 class autoencoder(nn.Module):
     def __init__(self):
@@ -194,8 +304,8 @@ def train_autoencoder(dataloaders, logger, device, wd, constant):
             picbefore = to_img(img.data, img.data.shape[2])
             picafter = to_img(output.data, img.data.shape[2])
 
-            #save_image(picbefore, wd+'/reconstruction/attacker_'+constant.INTERMEDIATE_DATA_DIR+'image_{}_before.png'.format(epoch))
-            #save_image(picafter, wd+'/reconstruction/attacker_'+constant.INTERMEDIATE_DATA_DIR+'image_{}_after.png'.format(epoch))
+            save_image(picbefore, wd+'/reconstruction/attacker_'+constant.INTERMEDIATE_DATA_DIR+'image_{}_before.png'.format(epoch))
+            save_image(picafter, wd+'/reconstruction/attacker_'+constant.INTERMEDIATE_DATA_DIR+'image_{}_after.png'.format(epoch))
     return model
 
 def save_image_tensor(tensor, filename):
@@ -221,6 +331,7 @@ def compute_mse_psnr(reconstructed_01, original_01):
 class Config:
     attacker_epochs = 30          # epochs to train the attacker's own autoencoder on CIFAR100
     INTERMEDIATE_DATA_DIR = "Train"
+    ATTACK_DATA_DIR = "Attack"
     SAVE_EVERY_N_EPOCHS = 50
     BATCH_SIZE = 256
     SEED = 1234
@@ -241,11 +352,12 @@ else:
 print(f"[Attacker] Using device: {device}")
  
 INTERMEDIATE_DIR = os.path.join(wd, "intermediate", constant.INTERMEDIATE_DATA_DIR)
+ATTACK_DATA_DIR = os.path.join(wd, "attacker_" + constant.ATTACK_DATA_DIR)
 LABEL_DIR = os.path.join(wd, "labels", constant.INTERMEDIATE_DATA_DIR)
 RECON_DIR = os.path.join(wd, "reconstruction", "attacker_" + constant.INTERMEDIATE_DATA_DIR)
 IMAGE_DIR = os.path.join(wd, "images", constant.INTERMEDIATE_DATA_DIR) 
 
- 
+os.makedirs(ATTACK_DATA_DIR, exist_ok=True)
 Path(os.path.join(wd, "reconstruction")).mkdir(parents=True, exist_ok=True)  # used by train_autoencoder()
 Path(RECON_DIR).mkdir(parents=True, exist_ok=True)                          # used by the attack step below
  
@@ -305,7 +417,8 @@ with torch.no_grad():
         pic = to_img(reconstructed.data, reconstructed.data.shape[2])
  
         out_name = f"epoch{epoch_str}_client{client_str}_batch{batch_str}.png"
-        save_image(pic, os.path.join(RECON_DIR, out_name))
+        
+        save_image(pic, os.path.join(ATTACK_DATA_DIR, out_name))
         reconstruction_count += 1
 
         image_path = os.path.join(IMAGE_DIR, filename)
@@ -322,7 +435,7 @@ with torch.no_grad():
             print(f"[Attacker] {filename}: MSE={batch_mse:.4f}, PSNR={batch_psnr:.2f} dB")
  
 print(f"[Attacker] Reconstructed {reconstruction_count} batches of images from captured intermediate data.")
-print(f"[Attacker] Reconstructions saved to: {RECON_DIR}")
+print(f"[Attacker] Reconstructions saved to: {ATTACK_DATA_DIR}")
  
 if scored_batches > 0:
     avg_mse = mse_sum / scored_batches
