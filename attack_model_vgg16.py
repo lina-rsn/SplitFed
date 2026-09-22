@@ -30,145 +30,70 @@ target_w = 32
 ###############################################################################################
 # encoder - decoder architecture
 ###############################################################################################
-
-class encoder_resnet18(nn.Module):
+class encoder_vgg16(nn.Module):
     def __init__(self):
-            super(encoder_resnet18, self).__init__()
-            self.layer1 = nn.Sequential (
-                    nn.Conv2d(3, 64, kernel_size = 7, stride = 2, padding = 3, bias = False),
-                    nn.BatchNorm2d(64),
-                    nn.ReLU (inplace = True),
-                    nn.MaxPool2d(kernel_size = 3, stride = 2, padding =1),
-                )
-            self.layer2 = nn.Sequential  (
-                    nn.Conv2d(64, 64, kernel_size = 3, stride = 1, padding = 1, bias = False),
-                    nn.BatchNorm2d(64),
-                    nn.ReLU (inplace = True),
-                    nn.Conv2d(64, 64, kernel_size = 3, stride = 1, padding = 1),
-                    nn.BatchNorm2d(64),
-                )
-    
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                    m.weight.data.normal_(0, math.sqrt(2. / n))
-                elif isinstance(m, nn.BatchNorm2d):
-                    m.weight.data.fill_(1)
-                    m.bias.data.zero_()
-    
+            super(encoder_vgg16, self).__init__()
+            # here load the pretrained on imagenet vgg16
+            # cut the model on the cut layer
+            vgg_model = models.vgg16(pretrained = True)
+            features = list(vgg_model.features.children())
+            self.model = nn.Sequential(*features[:5]) # includes Conv2d -> ReLU -> Conv2d -> ReLU -> MaxPool2d 
     
     def forward(self, x):
-            resudial1 = F.relu(self.layer1(x))
-            out1 = self.layer2(resudial1)
-            out1 = out1 + resudial1 
-            resudial2 = F.relu(out1)
-            return resudial2
+        return self.model(x)     
 
 
-''' class decoder_resnet18(nn.Module):
-    def __init__(self):
-        super(decoder_resnet18, self).__init__()
-
-        # Mirrors encoder's layer2 
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(64),
-        )
-
-        # Upsample x2 (undoes encoder's maxpool stride=2)
-        self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=2,
-                                padding=1, output_padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-        )
-
-        # Upsample x2 again (undoes encoder's first conv stride=2)
-        self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, kernel_size=7, stride=2,
-                                padding=3, output_padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-        )
-
-        # Project back to 3 channels (RGB)
-        self.output = nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=1)
-
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        # Mirror the encoder's residual block
-        residual = x
-        out = self.layer1(x)
-        out = out + residual        # "adding the input here again"
-        out = F.relu(out)
-
-        # Undo the encoder's two stride-2 downsampling steps
-        out = self.up1(out)         # /4 -> /2 resolution
-        out = self.up2(out)         # /2 -> full resolution
-
-        #out = torch.tanh(self.output(out))  # or leave unbounded / use tanh
-        out = self.output(out)  
-        return out '''
-
-class decoder_resnet18(nn.Module):
+class decoder_vgg16(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(
-                64, 32,
-                kernel_size=4,
-                stride=2,
-                padding=1
-            ),
-            nn.ReLU(inplace=True)
-        )
-
-        self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(
-                32, 16,
-                kernel_size=4,
-                stride=2,
-                padding=1
-            ),
-            nn.ReLU(inplace=True)
-        )
-
-        self.output = nn.Conv2d(
-            16, 3,
-            kernel_size=3,
-            stride=1,
+        self.layer1 = nn.ConvTranspose2d(
+            64, 64,
+            kernel_size=4,
+            stride=2,
             padding=1
         )
 
+        self.layer2 = nn.Conv2d(
+            64, 64,
+            kernel_size=3,
+            padding=1
+        )
+
+        self.layer3 = nn.Conv2d(
+            64, 32,
+            kernel_size=3,
+            padding=1
+        )
+
+        self.output = nn.Conv2d(
+            32, 3,
+            kernel_size=3,
+            padding=1
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
     def forward(self, x):
-        x = self.up1(x)
-        x = self.up2(x)
-        x = self.output(x)
+        x = self.relu(self.layer1(x))  # 16 -> 32
+        x = self.relu(self.layer2(x))  # 32 -> 32
+        x = self.relu(self.layer3(x))  # 32 -> 32
+        x = self.output(x)             # 32 -> 32
 
         return x
-
 
     
 class autoencoder(nn.Module):
     def __init__(self):
         super(autoencoder, self).__init__()
 
-        self.encoder = encoder_resnet18()
-        self.decoder = decoder_resnet18()
+        self.encoder = encoder_vgg16()
+        self.decoder = decoder_vgg16()
 
     def forward(self, x):
         z = self.encoder(x)
-        x_reconstructed = self.decoder(z)
+        # x_reconstructed = self.decoder(z)
+        x_reconstructed = torch.sigmoid(self.decoder(z)) # for better colour reconstruction
 
         return x_reconstructed
 
@@ -191,6 +116,15 @@ _STD_T  = torch.tensor(CIFAR10_STD).view(1, 3, 1, 1)
 def denormalize_cifar10(x):
     return (x * _STD_T.to(x.device) + _MEAN_T.to(x.device)).clamp(0, 1)
 
+def detransform_cifar10(x):
+    x_de = denormalize_cifar10(x)
+    x_de = transforms.Resize(
+        (32, 32),
+        interpolation=transforms.InterpolationMode.BILINEAR
+    )(x_de)
+    return x_de
+
+
 def train_autoencoder(dataloaders, logger, device, wd, constant):
     model = autoencoder()
     model = model.to(device)
@@ -203,8 +137,9 @@ def train_autoencoder(dataloaders, logger, device, wd, constant):
             img, _ = data
             img = img.to(device)
 
+            target = denormalize_cifar10(img) # training in denormalized space for better colour reconstr.
             output = model(img)
-            loss = criterion(output,img)
+            loss = criterion(output,target)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -214,8 +149,8 @@ def train_autoencoder(dataloaders, logger, device, wd, constant):
             #picbefore = to_img(img.data, img.data.shape[2])
             #picafter = to_img(output.data, img.data.shape[2])
 
-            save_image(denormalize_cifar10(img.data), wd+'/reconstruction/attacker_'+constant.INTERMEDIATE_DATA_DIR+'image_{}_before.png'.format(epoch))
-            save_image(denormalize_cifar10(output), wd+'/reconstruction/attacker_'+constant.INTERMEDIATE_DATA_DIR+'image_{}_after.png'.format(epoch))
+            save_image(detransform_cifar10(img.data), RECON_DIR+ '/attacker_'+constant.INTERMEDIATE_DIR+'image_{}_before.png'.format(epoch))
+            save_image(output, RECON_DIR+'/attacker_'+constant.INTERMEDIATE_DIR+'image_{}_after.png'.format(epoch))
     return model
 
 def save_image_tensor(tensor, filename): #never used
@@ -240,8 +175,9 @@ def compute_mse_psnr(reconstructed_01, original_01):
 
 class Config:
     attacker_epochs = 40          # epochs to train the attacker's own autoencoder on CIFAR100
-    INTERMEDIATE_DATA_DIR = "Train"
-    ATTACK_DATA_DIR = "Attack"
+    INTERMEDIATE_DIR =  "intermediate_vgg16"
+    RECON_DIR = "reconstruction_vgg16"
+    ATTACK_DATA_DIR = "attack_vgg16"
     SAVE_EVERY_N_EPOCHS = 50
     BATCH_SIZE = 256
     SEED = 1234
@@ -261,14 +197,14 @@ else:
 
 print(f"[Attacker] Using device: {device}")
  
-INTERMEDIATE_DIR = os.path.join(wd, "intermediate", constant.INTERMEDIATE_DATA_DIR)
-ATTACK_DATA_DIR = os.path.join(wd, "attacker_" + constant.ATTACK_DATA_DIR)
-LABEL_DIR = os.path.join(wd, "labels", constant.INTERMEDIATE_DATA_DIR)
-#RECON_DIR = os.path.join(wd, "reconstruction", "attacker_" + constant.INTERMEDIATE_DATA_DIR)
-IMAGE_DIR = os.path.join(wd, "images", constant.INTERMEDIATE_DATA_DIR) 
+INTERMEDIATE_DIR = os.path.join(wd,  constant.INTERMEDIATE_DIR)
+ATTACK_DATA_DIR = os.path.join(wd, constant.ATTACK_DATA_DIR)
+LABEL_DIR = os.path.join(wd, "labels_vgg16")
+RECON_DIR = os.path.join(wd, constant.RECON_DIR)
+IMAGE_DIR = os.path.join(wd, "images_vgg16") 
 
 os.makedirs(ATTACK_DATA_DIR, exist_ok=True)
-Path(os.path.join(wd, "reconstruction")).mkdir(parents=True, exist_ok=True)  # used by train_autoencoder()
+Path(os.path.join(wd, constant.RECON_DIR)).mkdir(parents=True, exist_ok=True)  # used by train_autoencoder()
 #Path(RECON_DIR).mkdir(parents=True, exist_ok=True)                          # used by the attack step below
  
 # Load CIFAR 100 
@@ -286,6 +222,7 @@ cifar100_val = datasets.CIFAR100(root='data', train=False, download=True, transf
 # Load CIFAR 10 
 
 auxilary_transforms = transforms.Compose([
+                        transforms.Resize(64, interpolation=transforms.InterpolationMode.BILINEAR),
                         transforms.ToTensor(),
                         transforms.Normalize(mean = CIFAR10_MEAN, std = CIFAR10_STD)
                         ])
@@ -338,7 +275,7 @@ with torch.no_grad():
  
         reconstructed = model.decoder(intermediate)
         #pic = denormalize_cifar10(reconstructed)
-        pic = denormalize_cifar10(reconstructed.data)
+        pic = detransform_cifar10(reconstructed.data)
  
         out_name = f"epoch{epoch_str}_client{client_str}_batch{batch_str}.png"
         
@@ -348,7 +285,7 @@ with torch.no_grad():
         image_path = os.path.join(IMAGE_DIR, filename)
         if os.path.isfile(image_path):
             original = torch.load(image_path, map_location=device)
-            original_01 = denormalize_cifar10(original)
+            original_01 = detransform_cifar10(original)
             out_name = f"epoch{epoch_str}_client{client_str}_batch{batch_str}_org.png"
             save_image(original_01, os.path.join(ATTACK_DATA_DIR, out_name))
             batch_mse, batch_psnr = compute_mse_psnr(pic, original_01)
