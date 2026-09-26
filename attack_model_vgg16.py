@@ -38,6 +38,9 @@ class encoder_vgg16(nn.Module):
             vgg_model = models.vgg16(pretrained = True)
             features = list(vgg_model.features.children())
             self.model = nn.Sequential(*features[:5]) # includes Conv2d -> ReLU -> Conv2d -> ReLU -> MaxPool2d 
+
+            for p in self.model.parameters(): # trying out the attack with freezed weights
+                p.requires_grad_(False)
     
     def forward(self, x):
         return self.model(x)     
